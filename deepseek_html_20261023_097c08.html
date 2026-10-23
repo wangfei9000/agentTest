@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Ollama Agent Loop · 可视化</title>
+<style>
+  :root{
+    --bg:#0b0d12; --panel:#141821; --panel2:#1b2130; --border:#242c3d;
+    --text:#e6eaf2; --muted:#8b96ab; --accent:#4f9cff; --green:#3ddc97;
+    --amber:#ffb020; --red:#ff5c5c;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font:14px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI",sans-serif;}
+
+  /* 顶栏 */
+  .top{display:flex;justify-content:space-between;align-items:center;
+       padding:14px 20px;border-bottom:1px solid var(--border);
+       background:rgba(11,13,18,.88);backdrop-filter:blur(8px);
+       position:sticky;top:0;z-index:10}
+  .brand{font-weight:600;display:flex;align-items:center;gap:8px;font-size:15px}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--green);display:inline-block}
+  .dot.off{background:var(--muted)}
+  .dot.busy{background:var(--amber);animation:pulse 1s infinite}
+  @keyframes pulse{50%{opacity:.25}}
+  .conn{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--muted)}
+
+  /* 布局 */
+  .wrap{max-width:1180px;margin:0 auto;padding:18px;display:grid;
+        grid-template-columns:1fr 330px;gap:16px;align-items:start}
+  @media(max-width:900px){.wrap{grid-template-columns:1fr}}
+
+  .panel{background:var(--panel);border:1px solid var(--border);
+         border-radius:12px;padding:14px;margin-bottom:14px}
+  .lbl{font-size:12px;color:var(--muted);letter-spacing:.04em;
+       text-transform:uppercase;margin-bottom:8px;display:flex;
+       justify-content:space-between;align-items:center}
+
+  textarea,input,select{
+    width:100%;background:#0e1219;color:var(--text);
+    border:1px solid var(--border);border-radius:8px;
+    padding:9px 11px;font:inherit;outline:none;transition:border-color .15s;
+  }
+  textarea{resize:vertical;min-height:64px;font-family:inherit}
+  textarea:focus,input:focus,select:focus{border-color:var(--accent)}
+  input[type=number]{width:88px}
+
+  .row{display:flex;justify-content:space-between;align-items:center;
+       gap:10px;margin-top:10px;flex-wrap:wrap}
+  .examples{display:flex;gap:6px;flex-wrap:wrap}
+  .chip{background:var(--panel2);border:1px solid var(--border);
+        color:var(--muted);border-radius:999px;padding:4px 11px;
+        font-size:12px;cursor:pointer;transition:.15s}
+  .chip:hover{color:var(--text);border-color:var(--accent)}
+
+  .btn{background:var(--panel2);border:1px solid var(--border);color:var(--text);
+       border-radius:8px;padding:8px 16px;font:inherit;cursor:pointer;transition:.15s}
+  .btn:hover:not(:disabled){border-color:var(--accent)}
+  .btn:disabled{opacity:.4;cursor:not-allowed}
+  .btn.primary{background:var(--accent);border-color:var(--accent);
+               color:#06121f;font-weight:600}
+  .btn.primary:hover:not(:disabled){filter:brightness(1.1)}
+  .btn.small{padding:5px 10px;font-size:12px;width:100%;margin-top:8px}
+
+  /* 轮次卡片 */
+  .round{background:var(--panel);border:1px solid var(--border);
+         border-radius:12px;padding:14px 16px;margin-bottom:12px;
+         animation:slidein .25s ease-out}
+  @keyframes slidein{from{opacity:0;transform:translateY(-6px)}}
+  .round-head{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+  .rnum{font-weight:600;font-size:13px}
+  .meta{font-size:12px;color:var(--muted);font-family:var(--mono);margin-left:auto}
+  .badge{padding:2px 9px;border-radius:999px;font-size:12px;font-weight:500}
+  .badge.thinking{background:rgba(79,156,255,.15);color:var(--accent)}
+  .badge.tool{background:rgba(255,176,32,.15);color:var(--amber)}
+  .badge.done{background:rgba(61,220,151,.15);color:var(--green)}
+  .badge.error{background:rgba(255,92,92,.15);color:var(--red)}
+
+  .text{margin:8px 0;white-space:pre-wrap;word-break:break-word}
+  .thinking-text{color:var(--muted);font-size:13px;border-left:2px solid var(--border);
+                 padding-left:10px;margin:8px 0;white-space:pre-wrap}
+
+  .toolcall{margin:10px 0;border-left:2px solid var(--amber);padding-left:10px}
+  .tc-head{font-family:var(--mono);font-size:13px;color:var(--amber);margin-bottom:4px}
+  pre{margin:4px 0;padding:9px 11px;background:#0e1219;border:1px solid var(--border);
+      border-radius:8px;overflow:auto;font-family:var(--mono);font-size:12px;
+      color:#b9c4d8;max-height:220px}
+
+  .toolresult{margin:6px 0 10px;padding:8px 11px;border-radius:8px;font-size:13px;
+              background:rgba(61,220,151,.08);border:1px solid rgba(61,220,151,.28);
+              color:var(--green);font-family:var(--mono);word-break:break-all}
+  .toolresult.err{background:rgba(255,92,92,.08);
+                  border-color:rgba(255,92,92,.3);color:var(--red)}
+  .final{margin-top:10px;padding:12px 14px;border-radius:10px;
+         background:rgba(79,156,255,.09);border:1px solid rgba(79,156,255,.3);
+         white-space:pre-wrap;word-break:break-word}
+  .note{margin-top:8px;font-size:12px;color:var(--amber)}
+
+  /* 上下文侧栏 */
+  .ctxlist{max-height:300px;overflow:auto;font-family:var(--mono);font-size:11.5px}
+  .ctxitem{display:flex;gap:7px;padding:5px 0;border-bottom:1px solid #1a2030}
+  .role{flex:0 0 62px;font-weight:600}
+  .role.user{color:var(--accent)}
+  .role.assistant{color:var(--green)}
+  .role.tool{color:var(--amber)}
+  .role.system{color:var(--muted)}
+  .ctxtext{color:var(--muted);overflow:hidden;text-overflow:ellipsis;
+           white-space:nowrap;flex:1}
+  .hint{font-size:12px;color:var(--muted);line-height:1.7;margin:0;padding-left:16px}
+  .hint code{font-family:var(--mono);background:#0e1219;padding:1px 5px;
+             border-radius:4px;color:#b9c4d8}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="brand"><span class="dot" id="brandDot"></span> Ollama Agent Loop</div>
+  <div class="conn"><span class="dot off" id="connDot"></span><span id="connText">未连接</span></div>
+</header>
+
+<div class="wrap">
+  <main>
+    <section class="panel">
+      <div class="lbl">你的问题</div>
+      <textarea id="q">请计算 (11434 + 12341) * 412 的结果。</textarea>
+      <div class="row">
+        <div class="examples">
+          <button class="chip" data-q="请计算 (11434 + 12341) * 412 的结果。">两步计算</button>
+          <button class="chip" data-q="现在几点？把当前的小时数乘以 60，告诉我结果。">时间 + 计算</button>
+          <button class="chip" data-q="先算 37 加 85，再把结果乘以 3。">另一道题</button>
+        </div>
+        <div class="actions">
+          <button id="run" class="btn primary">运行 Agent</button>
+          <button id="stop" class="btn" disabled>停止</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="timeline"></section>
+  </main>
+
+  <aside>
+    <div class="panel">
+      <div class="lbl">推理后端</div>
+      <input id="model" list="modelList" value="qwen3:8b" placeholder="模型名，如 qwen3:8b" />
+      <datalist id="modelList"></datalist>
+      <button id="refresh" class="btn small">刷新模型列表</button>
+
+      <div class="row" style="margin-top:14px">
+        <span style="font-size:12px;color:var(--muted)">num_ctx</span>
+        <input id="ctx" type="number" value="8192" min="2048" step="1024" />
+      </div>
+      <div class="row">
+        <span style="font-size:12px;color:var(--muted)">最大轮次</span>
+        <input id="maxiter" type="number" value="10" min="1" max="30" />
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="lbl">上下文窗口 <span id="ctxCount">0 条</span></div>
+      <div id="ctxList" class="ctxlist"></div>
+    </div>
+
+    <div class="panel">
+      <div class="lbl">使用前提</div>
+      <ul class="hint">
+        <li>Ollama 需允许跨域：<br><code>OLLAMA_ORIGINS="*" ollama serve</code></li>
+        <li>用本地服务器打开本页：<br><code>python3 -m http.server 8000</code></li>
+        <li>模型需支持 tools（如 <code>qwen3:8b</code>、<code>qwen2.5:7b</code>）</li>
+      </ul>
+    </div>
+  </aside>
+</div>
+
+<script>
+/* ============ 配置 ============ */
+const API = 'http://localhost:11434';
+
+/* ============ 工具定义（交给模型看的 JSON Schema） ============ */
+const TOOLS = [
+  {
+    type: 'function',
+    function: {
+      name: 'add',
+      description: '将两个数字相加，返回和。',
+      parameters: {
+        type: 'object',
+        properties: {
+          a: { type: 'number', description: '第一个加数' },
+          b: { type: 'number', description: '第二个加数' }
+        },
+        required: ['a', 'b']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'multiply',
+      description: '将两个数字相乘，返回积。',
+      parameters: {
+        type: 'object',
+        properties: {
+          a: { type: 'number', description: '第一个乘数' },
+          b: { type: 'number', description: '第二个乘数' }
+        },
+        required: ['a', 'b']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_current_time',
+      description: '获取当前本地时间，返回 ISO 字符串以及小时、分钟。',
+      parameters: { type: 'object', properties: {}, required: [] }
+    }
+  }
+];
+
+/* ============ 工具在浏览器里的真实实现 ============ */
+const TOOL_IMPL = {
+  add: ({ a, b }) => String(Number(a) + Number(b)),
+  multiply: ({ a, b }) => String(Number(a) * Number(b)),
+  get_current_time: () => {
+    const d = new Date();
+    return JSON.stringify({
+      iso: d.toISOString(),
+      hour: d.getHours(),
+      minute: d.getMinutes()
+    });
+  }
+};
+
+/* ============ 系统提示 ============ */
+const SYSTEM_PROMPT =
+  '你是一个善于使用工具的助手。当问题涉及计算或获取当前时间时，必须调用提供的工具，' +
+  '不要心算或猜测。你可以连续多次调用工具，直到收集到足够信息再给出最终答案。' +
+  '最终答案请用简洁的中文说明。';
+
+/* ============ DOM ============ */
+const $ = id => document.getElementById(id);
+const timelineEl = $('timeline');
+const ctxListEl  = $('ctxList');
+const ctxCountEl = $('ctxCount');
+const runBtn     = $('run');
+const stopBtn    = $('stop');
+const connDot    = $('connDot');
+const connText   = $('connText');
+
+/* ============ 状态 ============ */
+let running = false;
+let abortCtrl = null;
+
+/* ============ 小工具函数 ============ */
+const el = (tag, cls, text) => {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text != null) n.textContent = text;
+  return n;
+};
+
+function setConn(ok, msg) {
+  connDot.className = 'dot ' + (ok ? '' : 'off');
+  connText.textContent = msg;
+}
+
+/* ============ 连接检查 / 模型列表 ============ */
+async function refreshModels() {
+  setConn(false, '连接中…');
+  try {
+    const res = await fetch(API + '/api/tags');
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    const list = $('modelList');
+    list.innerHTML = '';
+    (data.models || []).forEach(m => {
+      const o = document.createElement('option');
+      o.value = m.name;
+      list.appendChild(o);
+    });
+    const names = (data.models || []).map(m => m.name);
+    const cur = $('model').value.trim();
+    if (names.length && !names.includes(cur)) $('model').value = names[0];
+    setConn(true, `已连接 · ${names.length} 个模型`);
+  } catch (e) {
+    setConn(false, '连接失败（检查 Ollama 与跨域设置）');
+  }
+}
+
+/* ============ 调用 Ollama ============ */
+async function callOllama(messages) {
+  const body = {
+    model: $('model').value.trim(),
+    messages,
+    tools: TOOLS,
+    stream: false,
+    options: {
+      num_ctx: parseInt($('ctx').value, 10) || 8192,
+      temperature: 0.2
+    }
+  };
+  const res = await fetch(API + '/api/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: abortCtrl.signal
+  });
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error(`HTTP ${res.status}: ${t.slice(0, 300)}`);
+  }
+  return res.json();
+}
+
+/* ============ 卡片渲染 ============ */
+function createCard(round) {
+  const card = el('div', 'round');
+  const head = el('div', 'round-head');
+  head.appendChild(el('span', 'rnum', `第 ${round} 轮`));
+  const badge = el('span', 'badge thinking', '模型思考中…');
+  head.appendChild(badge);
+  const meta = el('span', 'meta', '');
+  head.appendChild(meta);
+  card.appendChild(head);
+  const body = el('div', 'round-body');
+  card.appendChild(body);
+  timelineEl.appendChild(card);
+  card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  return { card, badge, meta, body };
+}
+
+function setStatus(ctx, cls, text) {
+  ctx.badge.className = 'badge ' + cls;
+  ctx.badge.textContent = text;
+}
+
+function appendText(ctx, text) {
+  ctx.body.appendChild(el('div', 'text', text));
+}
+
+function appendThinking(ctx, text) {
+  ctx.body.appendChild(el('div', 'thinking-text', text));
+}
+
+function appendToolCall(ctx, name, args) {
+  const box = el('div', 'toolcall');
+  box.appendChild(el('div', 'tc-head', '🔧 调用工具：' + name));
+  box.appendChild(el('pre', null, JSON.stringify(args, null, 2)));
+  ctx.body.appendChild(box);
+}
+
+function appendToolResult(ctx, result, ok = true) {
+  const box = el('div', 'toolresult' + (ok ? '' : ' err'),
+                 (ok ? '✅ 本地执行结果：' : '❌ 执行失败：') + result);
+  ctx.body.appendChild(box);
+}
+
+function appendFinal(ctx, text) {
+  ctx.body.appendChild(el('div', 'final', text || '（模型未返回文本）'));
+}
+
+function appendError(ctx, msg) {
+  ctx.body.appendChild(el('div', 'toolresult err', msg));
+}
+
+function appendNote(ctx, msg) {
+  ctx.body.appendChild(el('div', 'note', msg));
+}
+
+/* ============ 上下文查看器 ============ */
+function updateContextView(messages) {
+  ctxCountEl.textContent = messages.length + ' 条';
+  ctxListEl.innerHTML = '';
+  messages.forEach(m => {
+    const item = el('div', 'ctxitem');
+    item.appendChild(el('span', 'role ' + m.role, m.role));
+    let preview = '';
+    if (m.content) preview = String(m.content);
+    else if (m.tool_calls) preview = 'tool_calls: ' + m.tool_calls.map(c => c.function.name).join(', ');
+    if (preview.length > 70) preview = preview.slice(0, 70) + '…';
+    item.appendChild(el('span', 'ctxtext', preview));
+    item.title = preview;
+    ctxListEl.appendChild(item);
+  });
+  ctxListEl.scrollTop = ctxListEl.scrollHeight;
+}
+
+/* ============ Agent Loop 主流程 ============ */
+async function runAgent() {
+  if (running) return;
+
+  const question = $('q').value.trim();
+  if (!question) return;
+
+  running = true;
+  runBtn.disabled = true;
+  stopBtn.disabled = false;
+  $('brandDot').className = 'dot busy';
+  abortCtrl = new AbortController();
+  timelineEl.innerHTML = '';
+
+  const messages = [
+    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'user', content: question }
+  ];
+  updateContextView(messages);
+
+  const maxIter = parseInt($('maxiter').value, 10) || 10;
+  let repeatSig = null;
+  let repeatCount = 0;
+  let finished = false;
+
+  try {
+    outer:
+    for (let round = 1; round <= maxIter; round++) {
+      const ctx = createCard(round);
+      const t0 = performance.now();
+
+      let data;
+      try {
+        data = await callOllama(messages);
+      } catch (err) {
+        if (err.name === 'AbortError') {
+          setStatus(ctx, 'error', '已手动停止');
+          finished = true;
+          break;
+        }
+        setStatus(ctx, 'error', '请求失败');
+        appendError(ctx, err.message +
+          '\n\n排查：① Ollama 是否运行 ② 模型是否支持 tools ③ 是否设置了 OLLAMA_ORIGINS="*"');
+        finished = true;
+        break;
+      }
+
+      const cost = Math.round(performance.now() - t0);
+      ctx.meta.textContent = cost + ' ms';
+
+      const msg = data.message || {};
+      const content = (msg.content || '').trim();
+      const calls = Array.isArray(msg.tool_calls) ? msg.tool_calls : [];
+
+      if (msg.thinking) appendThinking(ctx, msg.thinking);
+      if (content) appendText(ctx, content);
+
+      /* 没有工具调用 → 结束 */
+      if (calls.length === 0) {
+        setStatus(ctx, 'done', '完成');
+        appendFinal(ctx, content);
+        messages.push({ role: 'assistant', content });
+        updateContextView(messages);
+        finished = true;
+        break;
+      }
+
+      /* 有工具调用 */
+      setStatus(ctx, 'tool', `工具调用 × ${calls.length}`);
+      messages.push({
+        role: 'assistant',
+        content: msg.content || '',
+        tool_calls: calls
+      });
+
+      for (const call of calls) {
+        const name = call.function && call.function.name;
+        let args = call.function && call.function.arguments;
+
+        /* 兼容字符串形式的 arguments */
+        if (typeof args === 'string') {
+          try { args = JSON.parse(args); } catch (_) { args = {}; }
+        }
+        args = args || {};
+
+        /* 重复调用检测 */
+        const sig = name + '|' + JSON.stringify(args);
+        if (sig === repeatSig) repeatCount++;
+        else { repeatSig = sig; repeatCount = 1; }
+
+        if (repeatCount >= 4) {
+          setStatus(ctx, 'error', '检测到重复调用');
+          appendNote(ctx, `模型连续 ${repeatCount} 次以相同参数调用 ${name}，已中断循环。`);
+          messages.push({ role: 'assistant', content: '（循环已中断）' });
+          finished = true;
+          updateContextView(messages);
+          break outer;
+        }
+
+        appendToolCall(ctx, name, args);
+
+        let result;
+        let ok = true;
+        try {
+          if (!TOOL_IMPL[name]) throw new Error('未知工具：' + name);
+          result = await TOOL_IMPL[name](args);
+        } catch (e) {
+          ok = false;
+          result = e.message;
+        }
+
+        appendToolResult(ctx, result, ok);
+
+        /* 关键一步：把结果以 role=tool 回灌给模型 */
+        messages.push({
+          role: 'tool',
+          content: String(result),
+          tool_name: name
+        });
+      }
+
+      updateContextView(messages);
+    }
+
+    if (!finished) {
+      const card = createCard('!');
+      setStatus(card, 'error', '达到最大轮次');
+      appendNote(card, `已循环 ${maxIter} 轮仍未结束，可能存在死循环风险，已强制停止。`);
+    }
+  } finally {
+    running = false;
+    runBtn.disabled = false;
+    stopBtn.disabled = true;
+    $('brandDot').className = 'dot';
+    abortCtrl = null;
+    updateContextView(messages);
+  }
+}
+
+/* ============ 事件绑定 ============ */
+runBtn.addEventListener('click', runAgent);
+stopBtn.addEventListener('click', () => {
+  if (abortCtrl) abortCtrl.abort();
+});
+$('refresh').addEventListener('click', refreshModels);
+
+document.querySelectorAll('.chip').forEach(btn => {
+  btn.addEventListener('click', () => { $('q').value = btn.dataset.q; });
+});
+
+/* 启动时检查连接 */
+refreshModels();
+</script>
+</body>
+</html>
