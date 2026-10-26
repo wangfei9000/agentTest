@@ -1,13 +1,28 @@
-from ollama import chat, ChatResponse
-import json
+from ollama import Client, ChatResponse, ResponseError
+import time
+
+# 直连本机，避免请求被系统代理转走后返回空 502
+client = Client(host="http://127.0.0.1:11434", trust_env=False)
 
 # 1. 定义你的工具（函数）
 def add(a: int, b: int) -> int:
-    """将两个数字相加。"""
+    """将两个数字相加。
+
+    Args:
+        a: 第一个加数
+        b: 第二个加数
+    """
+    print("add ->" + str(a) + " + " + str(b))
     return a + b
 
 def multiply(a: int, b: int) -> int:
-    """将两个数字相乘。"""
+    """将两个数字相乘。
+
+    Args:
+        a: 被乘数
+        b: 乘数
+    """
+    print("multiply ->" + str(a) + " * " + str(b))
     return a * b
 
 # 建立一个从工具名到函数的映射，方便动态调用
@@ -27,12 +42,22 @@ print("--- Agent 开始工作 ---")
 for iteration in range(10):  # 安全上限：最多循环 10 次，防止失控
     print(f"\n[第 {iteration + 1} 轮] 正在请求模型...")
 
-    response: ChatResponse = chat(
-        model='qwen3:8b',
-        messages=messages,
-        tools=[add, multiply],  # 将工具清单交给模型
-        # think=True,           # 可选：让模型输出思考过程（如果模型支持）
-    )
+    response: ChatResponse | None = None
+    for attempt in range(3):
+        try:
+            response = client.chat(
+                model='qwen3.5:9b',
+                messages=messages,
+                tools=[add, multiply],  # 将工具清单交给模型
+                think=False,
+            )
+            break
+        except ResponseError as e:
+            # 模型进程换页或尚未就绪时，Ollama 会回空的 502/503
+            if e.status_code not in (502, 503) or attempt == 2:
+                raise
+            print(f"  模型返回 {e.status_code}，3 秒后重试 ({attempt + 1}/3)...")
+            time.sleep(3)
 
     # 将模型的响应（包含它的“思考”或“决策”）加入历史
     messages.append(response.message)
