@@ -1,14 +1,15 @@
 """估值、出报告、查询案例。
 
-三个函数都会交给本地模型当作工具。顶部的 URL 为空时返回示例数据；
-填入真实接口地址后，改为 POST JSON，并把响应原样交回模型和页面。
-真实接口需要返回 JSON 对象，字段与示例结果保持一致。
+三个函数都会交给本地模型当作工具。查询案例和出报告的 URL 为空时返回示例数据。
+估值请求云房接口，并把单价、总价映射成页面使用的字段。
 """
 
 from __future__ import annotations
 
 import inspect
 import json
+import re
+import ssl
 import threading
 import types
 import typing
@@ -16,16 +17,24 @@ import urllib.error
 import urllib.request
 from typing import Any, Callable
 
+import certifi
+
 # 三个业务接口。留空时走本文件里的示例数据；填上地址后改为 POST JSON。
 # 请求体字段与对应函数参数一致，响应必须是 JSON 对象，字段见各函数上方的注释。
 # 失败时返回 {"ok": false, "error": "原因"}。ok 可以省略，省略按成功处理。
 
 # 查询案例。POST 后返回 cases 列表。
 SEARCH_CASES_URL = ""
-# 估值。POST 后返回单价、总价和 valuation_id。
-VALUATION_URL = ""
+# 估值。POST 云房接口，再映射成页面用的单价、总价和 valuation_id。
+VALUATION_URL = "https://dpi.yunfangdata.com/dpi/execute?code=CMBZPEKD4YPB8UHG"
 # 出报告。POST 后返回标题、摘要和正文。
 GENERATE_REPORT_URL = ""
+
+# 云房估价的固定账号和模式，不交给模型填写。
+_DPI_ACCOUNT_ID = "358f5eb811074b81998b10561af618b2"
+_DPI_MODE = "自动"
+_CITY_RE = re.compile(r"[\u4e00-\u9fff]{2,8}?市")
+_PROVINCE_RE = re.compile(r"[\u4e00-\u9fff]{2,8}省")
 
 _lock = threading.Lock()
 _valuation_seq = 0
@@ -168,15 +177,15 @@ def search_cases(
 
 
 # 估值接口。用户要求估价时走这里，不要用查询案例代替。
-# 请求：address（地址或小区，必填）、area（建筑面积，平方米，必填）、property_type（住宅/别墅/商办，默认住宅）、
-# floor（楼层描述）、case_ids（案例编号列表）。
-# 返回：valuation_id、unit_price（元/平方米）、total_price（元）、basis（依据）、summary，
-# 以及引用到的 case_ids、references。
+# 云房请求：accountExternalId、cityName、address、area（字符串）、houseType、mode。
+# 不传 priceDate、楼层和案例编号。
+# 返回：valuation_id、unit_price（元/平方米）、total_price（元）、basis（依据）、summary。
 # 地址：VALUATION_URL。为空时按示例单价估算，并把结果记在本进程里，供出报告使用。
 def valuation(
     address: str,
     area: float,
     property_type: str = "住宅",
+    city_name: str | None = None,
     floor: str | None = None,
     case_ids: list[str] | None = None,
 ) -> dict[str, Any]:
@@ -185,25 +194,16 @@ def valuation(
     对一处房产做估价，返回单价和总价。
 
     Args:
-        address: 房产地址或小区名
+        address: 房产地址或小区名，可以包含城市名
         area: 建筑面积，单位平方米
         property_type: 物业类型，例如住宅、别墅、商办。不确定时填住宅
+        city_name: 城市，必须来自用户原话，例如通化市。用户没说就留空，不要猜测
         floor: 楼层描述，例如高楼层、中楼层、低楼层。不确定时留空
         case_ids: 已查询到的案例编号列表。没有则留空
     """
-    payload = {
-        "address": address,
-        "area": area,
-        "property_type": property_type,
-        "floor": floor,
-        "case_ids": case_ids,
-    }
     if VALUATION_URL:
-        data = _from_remote(VALUATION_URL, payload, "估值")
-        if data.get("ok") and data.get("valuation_id"):
-            _remember_valuation(str(data["valuation_id"]), data)
-        return data
-    return _mock_valuation(address, area, property_type, floor, case_ids)
+        return _dpi_valuation(address, area, property_type, city_name, floor)
+    #return _mock_valuation(address, area, property_type, floor, case_ids)
 
 
 # 出报告接口。
@@ -269,6 +269,118 @@ TOOL_LABELS = {
 }
 
 
+def first_city(text: str) -> str:
+    """取文本里最先出现的「××市」。省名先去掉，避免「吉林省通化市」被收成一个城市。"""
+    stripped = _PROVINCE_RE.sub("", text or "")
+    matched = _CITY_RE.search(stripped)
+    return matched.group(0) if matched else ""
+
+
+def _dpi_valuation(
+    address: str,
+    area: float,
+    property_type: str,
+    city_name: str | None,
+    floor: str | None,
+) -> dict[str, Any]:
+    address = (address or "").strip()
+    city = (city_name or "").strip()
+    if city and not city.endswith("市"):
+        city += "市"
+    address = re.sub(r"[\s,，。；;、]+", " ", address).strip()
+    if not address:
+        return {"ok": False, "error": "估价需要地址或小区名"}
+    if area <= 0:
+        return {"ok": False, "error": "建筑面积需要大于 0"}
+    if area > 100000:
+        return {"ok": False, "error": "建筑面积超出可接受范围"}
+    if not city:
+        return {"ok": False, "error": "请输入城市，例如：通化市。"}
+
+    property_type = (property_type or "住宅").strip() or "住宅"
+    body = {
+        "accountExternalId": _DPI_ACCOUNT_ID,
+        "cityName": city,
+        "address": address,
+        "area": _area_text(area),
+        "houseType": "住宅",
+        "mode": "自动",
+    }
+    try:
+        data = _post_json(VALUATION_URL, body)
+    except Exception as exc:
+        return {"ok": False, "error": f"估值接口失败：{exc}"}
+    if not isinstance(data, dict):
+        return {"ok": False, "error": "估值接口返回的不是 JSON 对象"}
+
+    status = str(data.get("status") or "")
+    if status != "OK":
+        detail = data.get("message") or data.get("error") or status or "无状态"
+        return {"ok": False, "error": f"估值未成功：{detail}"}
+    unit_price = _as_int(data.get("price"))
+    if unit_price is None:
+        return {"ok": False, "error": "未返回单价"}
+    total_price = _as_int(data.get("totalPrice"))
+    if total_price is None:
+        total_price = int(round(unit_price * area))
+
+    valuation_id = str(data.get("externalId") or "").strip()
+    if not valuation_id:
+        global _valuation_seq
+        with _lock:
+            _valuation_seq += 1
+            valuation_id = f"V{_valuation_seq:04d}"
+    result = {
+        "ok": True,
+        "valuation_id": valuation_id,
+        "address": address,
+        "area": area,
+        "property_type": property_type,
+        "city_name": str(data.get("cityName") or city),
+        "floor": (floor or "").strip(),
+        "unit_price": unit_price,
+        "total_price": total_price,
+        "basis": _dpi_basis(data),
+        "case_ids": [],
+        "references": [],
+        "summary": f"评估单价 {unit_price:,} 元/平方米，总价 {total_price:,} 元",
+    }
+    _remember_valuation(valuation_id, result)
+    return result
+
+
+def _area_text(area: float) -> str:
+    if float(area).is_integer():
+        return f"{area:.1f}"
+    return f"{area:.4f}".rstrip("0").rstrip(".")
+
+
+def _as_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(round(float(value)))
+    except (TypeError, ValueError):
+        return None
+
+
+def _dpi_basis(data: dict[str, Any]) -> str:
+    place = "".join(
+        str(data.get(key) or "")
+        for key in ("province", "cityName", "districtName", "communityName")
+    )
+    details = []
+    if place:
+        details.append(f"匹配到{place}")
+    if data.get("buildYear"):
+        details.append(f"建成年份 {data['buildYear']}")
+    if data.get("priceDate"):
+        details.append(f"价格日期 {data['priceDate']}")
+    if not details:
+        return "自动估价。"
+    return "自动估价。" + "，".join(details) + "。"
+
+
 def _from_remote(url: str, payload: dict[str, Any], label: str) -> dict[str, Any]:
     try:
         data = _post_json(url, payload)
@@ -291,7 +403,12 @@ def _post_json(url: str, payload: dict[str, Any]) -> Any:
         },
         method="POST",
     )
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    # 这台机器自带的 Python 没有系统根证书，用 certifi 的证书包校验 HTTPS。
+    context = ssl.create_default_context(cafile=certifi.where())
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({}),
+        urllib.request.HTTPSHandler(context=context),
+    )
     try:
         with opener.open(request, timeout=30) as response:
             return json.loads(response.read().decode("utf-8"))
@@ -337,7 +454,7 @@ def _mock_search(
         "sample": True,
     }
 
-
+"""
 def _mock_valuation(
     address: str,
     area: float,
@@ -424,7 +541,7 @@ def _mock_valuation(
     }
     _remember_valuation(valuation_id, result)
     return result
-
+"""
 
 def _mock_report(
     subject: str,

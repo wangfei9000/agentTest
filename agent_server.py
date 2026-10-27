@@ -3,6 +3,7 @@
 运行：
     .venv/bin/python agent_server.py
 
+nohup .venv/bin/python agent_server.py > start.log 2>&1 &
 浏览器打开 http://127.0.0.1:8765
 模型仍使用本机 Ollama 的 qwen3.5:9b，工具调用循环与 agent_wf.py 相同。
 """
@@ -23,12 +24,12 @@ from pathlib import Path
 
 from ollama import Client, Message, ResponseError
 
-from tools import TOOL_LABELS, TOOLS_FOR_MODEL, call_tool, using_sample_data
+from tools import TOOL_LABELS, TOOLS_FOR_MODEL, VALUATION_URL, call_tool, first_city, using_sample_data
 
-HOST = "127.0.0.1"
-PORT = 8765
+HOST = "0.0.0.0"
+PORT = 8081
 OLLAMA_HOST = "http://127.0.0.1:11434"
-MODEL = "qwen3.5:9b"
+MODEL = "llama3.2:latest" #"qwen3.5:9b"
 MAX_ROUNDS = 10
 ROOT = Path(__file__).resolve().parent
 
@@ -36,10 +37,14 @@ SYSTEM_PROMPT = (
     "你是房地产估价助手，用中文回答。价格和案例必须来自工具，不要编造。"
     "用户要求估值或估价时，必须调用 valuation，最终回答给出评估单价和总价。"
     "面积从用户原话提取，单位是平方米，「90平」就是 area=90，不能传 0。"
+    "城市必须来自用户原话里的「××市」，填入 city_name。用户没说城市就不要调用 valuation，也不要猜测。"
+    "如果对话里已经有本轮估值结果，直接根据结果回答，不要再次调用 valuation。"
     "只有用户明确要查成交案例时才调用 search_cases。不要用案例列表代替估价结果。"
     "用户要求出报告时调用 generate_report。"
     "参数只填工具需要的字段。"
 )
+
+ASK_CITY = "请输入城市，例如：通化市。"
 
 _AREA_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(?:平方米|平米|㎡|m²|m2|平)", re.IGNORECASE)
 
@@ -62,6 +67,7 @@ class Session:
         self.busy = False
         self.cancel = threading.Event()
         self.lock = threading.Lock()
+        self.pending_valuation: dict | None = None
 
 
 SESSIONS: dict[str, Session] = {}
@@ -128,7 +134,7 @@ def _asks_for_valuation(text: str) -> bool:
 
 
 def _valuation_args_from_text(text: str) -> dict | None:
-    """从「请估值」原话里取出地址、面积和物业类型。缺面积时返回空，交给模型追问。"""
+    """从「请估值」原话里取出城市、地址、面积和物业类型。缺面积时返回空。"""
     matched = _AREA_RE.search(text)
     if not matched:
         return None
@@ -140,7 +146,9 @@ def _valuation_args_from_text(text: str) -> dict | None:
         if name in text:
             property_type = name
             break
+    city = first_city(text)
     address = _AREA_RE.sub(" ", text)
+    address = re.sub(r"[\u4e00-\u9fff]{2,8}省", " ", address)
     for word in (
         "请帮我", "帮我", "请做估值", "请估值", "做估值", "要估值",
         "估值", "估价", "住宅", "别墅", "商办", "商业", "面积",
@@ -149,7 +157,48 @@ def _valuation_args_from_text(text: str) -> dict | None:
     address = re.sub(r"[\s,，。；;、]+", " ", address).strip()
     if len(address) < 2:
         return None
-    return {"address": address, "area": area, "property_type": property_type}
+    return {
+        "address": address,
+        "area": area,
+        "property_type": property_type,
+        "city_name": city,
+    }
+
+
+def _city_only(text: str) -> str:
+    """整句只是城市名时返回「××市」，否则返回空字符串。"""
+    compact = re.sub(r"[\s,，。；;、！!？?]+", "", (text or "").strip())
+    matched = re.fullmatch(r"([\u4e00-\u9fff]{2,8})市", compact)
+    if matched:
+        return matched.group(1) + "市"
+    if re.fullmatch(r"[\u4e00-\u9fff]{2,8}", compact):
+        return compact + "市"
+    return ""
+
+
+def _valuation_turn(session: Session, user_text: str) -> tuple[str, dict] | None:
+    """决定本轮是追问城市、直接估价，还是交给模型。"""
+    if _asks_for_valuation(user_text):
+        parsed = _valuation_args_from_text(user_text)
+        if not parsed:
+            return None
+        pending = {
+            "address": parsed["address"],
+            "area": parsed["area"],
+            "property_type": parsed["property_type"],
+        }
+        session.pending_valuation = pending
+        if parsed["city_name"]:
+            return ("run", {**pending, "city_name": parsed["city_name"]})
+        return ("ask", pending)
+
+    pending = session.pending_valuation
+    if not pending:
+        return None
+    city = _city_only(user_text)
+    if not city:
+        return None
+    return ("run", {**pending, "city_name": city})
 
 
 def _fill_valuation_args(args: dict, parsed: dict) -> dict:
@@ -164,6 +213,8 @@ def _fill_valuation_args(args: dict, parsed: dict) -> dict:
         filled["address"] = parsed["address"]
     if not str(filled.get("property_type") or "").strip():
         filled["property_type"] = parsed["property_type"]
+    if parsed.get("city_name"):
+        filled["city_name"] = parsed["city_name"]
     return filled
 
 
@@ -228,6 +279,20 @@ def run_turn(session: Session, emit) -> None:
     valuation_ok = False
     forced_valuation = False
     try:
+        turn = _valuation_turn(session, user_text)
+        if turn is not None:
+            action, args = turn
+            if action == "ask":
+                print(f"  缺少城市，已请用户补充 {args}")
+                _finish_assistant(session, emit, ASK_CITY)
+                committed = True
+                return
+            print(f"  直接估值 {args}")
+            valuation_ok = _inject_valuation(session, emit, args)
+            forced_valuation = True
+            if valuation_ok:
+                session.pending_valuation = None
+
         for iteration in range(MAX_ROUNDS):
             _ensure(session)
             round_msg = len(session.messages)
@@ -336,6 +401,13 @@ def _rollback(session: Session, message_index: int, transcript_index: int) -> No
         del session.transcript[transcript_index:]
 
 
+def _finish_assistant(session: Session, emit, content: str) -> None:
+    session.messages.append({"role": "assistant", "content": content})
+    _append_transcript(session, {"type": "assistant", "content": content})
+    emit({"type": "assistant", "content": content})
+    emit({"type": "done"})
+
+
 def _append_transcript(session: Session, item: dict) -> None:
     with session.lock:
         session.transcript.append(item)
@@ -347,6 +419,22 @@ def _emit_quietly(emit, payload: dict) -> None:
         emit(payload)
     except Cancelled:
         pass
+
+
+_U_ESCAPE_RE = re.compile(r"\\u([0-9a-fA-F]{4})")
+
+
+def _decode_u_escapes(value):
+    """把模型写进参数里的字面量 \\uXXXX 还原成汉字。"""
+    if isinstance(value, str):
+        if "\\u" not in value:
+            return value
+        return _U_ESCAPE_RE.sub(lambda match: chr(int(match.group(1), 16)), value)
+    if isinstance(value, list):
+        return [_decode_u_escapes(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _decode_u_escapes(item) for key, item in value.items()}
+    return value
 
 
 def _normalize_args(raw) -> dict:
@@ -361,11 +449,12 @@ def _normalize_args(raw) -> dict:
         except json.JSONDecodeError:
             return {}
     if isinstance(raw, dict):
-        return dict(raw)
+        return _decode_u_escapes(dict(raw))
     try:
-        return dict(raw)
+        parsed = dict(raw)
     except (TypeError, ValueError):
         return {}
+    return _decode_u_escapes(parsed)
 
 
 def _role(message) -> str | None:
@@ -570,8 +659,10 @@ def main() -> None:
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     print(f"估值助手已启动：http://{HOST}:{PORT}")
     print(f"模型：{MODEL} @ {OLLAMA_HOST}")
+    if VALUATION_URL:
+        print(f"估值接口：{VALUATION_URL}")
     if using_sample_data():
-        print("查询案例、估值、出报告目前使用示例数据。在 tools.py 顶部填入地址后改为真实请求。")
+        print("查询案例、出报告目前使用示例数据。")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
