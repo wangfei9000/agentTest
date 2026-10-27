@@ -1,0 +1,1097 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>估值助手</title>
+  <style>
+    @import url("https://fonts.googleapis.com/css2?family=Fira+Code:wght@500;600&family=Fira+Sans:wght@400;500;600;700&display=swap");
+
+    :root {
+      --color-primary: #1e3a5f;
+      --color-on-primary: #ffffff;
+      --color-secondary: #2563eb;
+      --color-accent: #047857;
+      --color-background: #f8fafc;
+      --color-foreground: #0f172a;
+      --color-muted: #f1f3f5;
+      --color-border: #e4e7eb;
+      --color-destructive: #dc2626;
+      --color-surface: #ffffff;
+      --color-subtle: #475569;
+      --shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+      --font: "Fira Sans", "PingFang SC", "Noto Sans SC", sans-serif;
+      --font-num: "Fira Code", "SF Mono", ui-monospace, monospace;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100dvh;
+      font-family: var(--font);
+      font-size: 16px;
+      line-height: 1.5;
+      color: var(--color-foreground);
+      background: var(--color-background);
+    }
+
+    button, textarea { font: inherit; touch-action: manipulation; }
+    button { cursor: pointer; }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    :focus-visible {
+      outline: 2px solid var(--color-primary);
+      outline-offset: 2px;
+    }
+
+    .skip {
+      position: absolute;
+      left: 12px;
+      top: -48px;
+      z-index: 1000;
+      background: var(--color-surface);
+      color: var(--color-foreground);
+      padding: 8px 12px;
+      border-radius: 8px;
+    }
+    .skip:focus { top: 12px; }
+
+    .app {
+      height: 100dvh;
+      display: grid;
+      grid-template-columns: 272px minmax(0, 1fr);
+    }
+
+    .sidebar {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      min-height: 0;
+      padding: 20px 16px;
+      background: var(--color-surface);
+      border-right: 1px solid var(--color-border);
+    }
+
+    .brand { margin: 0; font-size: 18px; font-weight: 600; color: var(--color-primary); }
+    .brand-sub { margin: 4px 0 0; color: var(--color-subtle); font-size: 14px; }
+
+    .primary, .ghost, .chip, .session-btn, .menu-btn {
+      transition: background-color 180ms ease-out, transform 180ms ease-out;
+    }
+    .primary:active, .ghost:active, .chip:active, .menu-btn:active { transform: scale(0.98); }
+
+    .primary {
+      min-height: 44px;
+      border: 0;
+      border-radius: 10px;
+      background: var(--color-primary);
+      color: var(--color-on-primary);
+      font-weight: 500;
+    }
+    .primary:hover:not(:disabled) { background: #254872; }
+
+    .ghost {
+      min-height: 44px;
+      padding: 0 14px;
+      border-radius: 10px;
+      border: 1px solid var(--color-border);
+      background: var(--color-surface);
+      color: var(--color-primary);
+      font-weight: 500;
+    }
+    .ghost:hover:not(:disabled) { background: var(--color-muted); }
+
+    .sidebar nav { flex: 1; min-height: 0; overflow: auto; }
+    .session-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .session-btn {
+      width: 100%;
+      min-height: 44px;
+      padding: 10px 12px;
+      border: 0;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--color-foreground);
+      text-align: left;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .session-btn:hover:not(:disabled) { background: var(--color-muted); }
+    .session-btn[aria-current="true"] {
+      background: var(--color-muted);
+      box-shadow: inset 3px 0 0 var(--color-primary);
+      font-weight: 600;
+    }
+
+    .backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 30;
+      border: 0;
+      background: rgba(15, 23, 42, 0.45);
+    }
+
+    main {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      min-height: 0;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-height: 64px;
+      padding: 8px 20px;
+      border-bottom: 1px solid var(--color-border);
+      background: var(--color-background);
+    }
+    h1 { margin: 0; font-size: 18px; font-weight: 600; }
+    .menu-btn {
+      display: none;
+      align-items: center;
+      gap: 6px;
+      min-height: 44px;
+      padding: 0 12px;
+      border: 1px solid var(--color-border);
+      border-radius: 10px;
+      background: var(--color-surface);
+      color: var(--color-primary);
+    }
+    .conn {
+      margin: 0 0 0 auto;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--color-subtle);
+      font-size: 14px;
+    }
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #64748b;
+    }
+    .dot[data-state="ok"] { background: var(--color-accent); }
+    .dot[data-state="bad"] { background: var(--color-destructive); }
+
+    .thread { flex: 1; min-height: 0; overflow: auto; }
+    .log {
+      max-width: 880px;
+      margin: 0 auto;
+      padding: 24px 20px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .empty h2 { margin: 0 0 8px; font-size: 24px; line-height: 1.3; }
+    .empty > p { margin: 0; max-width: 62ch; color: var(--color-subtle); }
+    .caps {
+      list-style: none;
+      margin: 20px 0 0;
+      padding: 0;
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 12px;
+    }
+    .caps li {
+      display: flex;
+      gap: 12px;
+      padding: 14px;
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      border-radius: 12px;
+    }
+    .cap-icon {
+      flex: 0 0 40px;
+      height: 40px;
+      display: grid;
+      place-items: center;
+      border-radius: 10px;
+      background: #e8eef5;
+      color: var(--color-primary);
+    }
+    .caps strong { display: block; }
+    .caps li > span > span {
+      display: block;
+      margin-top: 2px;
+      color: var(--color-subtle);
+      font-size: 14px;
+    }
+
+    .bubble, .tool-card, .error-card { animation: enter 200ms ease-out; }
+    .bubble p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .bubble-user {
+      align-self: flex-end;
+      max-width: min(100%, 62ch);
+      padding: 12px 14px;
+      border-radius: 16px 16px 4px 16px;
+      background: var(--color-primary);
+      color: var(--color-on-primary);
+    }
+    .bubble-assistant {
+      align-self: flex-start;
+      max-width: min(100%, 70ch);
+      padding: 12px 14px;
+      border: 1px solid var(--color-border);
+      border-radius: 4px 16px 16px 16px;
+      background: var(--color-surface);
+    }
+
+    .tool-card {
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      border-left: 4px solid var(--color-primary);
+      border-radius: 12px;
+      padding: 14px 16px;
+      box-shadow: var(--shadow);
+    }
+    .tool-card[data-tool="search_cases"] { border-left-color: var(--color-secondary); }
+    .tool-card[data-tool="valuation"] { border-left-color: var(--color-primary); }
+    .tool-card[data-tool="generate_report"] { border-left-color: var(--color-accent); }
+    .tool-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .tool-title-wrap { display: flex; align-items: center; gap: 8px; }
+    .tool-title { margin: 0; font-weight: 600; }
+    .tool-status { margin: 0 0 0 auto; font-size: 14px; color: var(--color-subtle); }
+    .tool-card[data-state="done"] .tool-status { color: var(--color-accent); }
+    .tool-card[data-state="error"] .tool-status { color: #b91c1c; }
+    .tool-args, .basis, .muted, .case-meta, .report-summary {
+      margin: 8px 0 0;
+      color: var(--color-subtle);
+      font-size: 14px;
+    }
+    .basis, .report-summary { color: var(--color-foreground); font-size: 16px; line-height: 1.6; }
+    .tool-error { margin: 12px 0 0; color: #7f1d1d; }
+
+    .metrics { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px; }
+    .metric {
+      flex: 1 1 180px;
+      padding: 12px;
+      border-radius: 10px;
+      background: var(--color-muted);
+    }
+    .metric-label { display: block; font-size: 14px; color: var(--color-subtle); }
+    .metric-value {
+      display: block;
+      margin-top: 4px;
+      font-family: var(--font-num);
+      font-size: 22px;
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: -0.02em;
+    }
+
+    .cases, .refs {
+      list-style: none;
+      margin: 12px 0 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .case, .refs li {
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: var(--color-muted);
+    }
+    .case-title, .refs li { margin: 0; }
+    .case-title { font-weight: 600; }
+    .ref-label { margin: 12px 0 0; font-weight: 600; }
+
+    .report-title { margin: 12px 0 0; font-size: 18px; }
+    .report-details summary {
+      min-height: 44px;
+      display: flex;
+      align-items: center;
+      cursor: pointer;
+      font-weight: 500;
+      color: var(--color-primary);
+    }
+    .plain {
+      margin: 0;
+      white-space: pre-wrap;
+      font-family: var(--font);
+      font-size: 15px;
+      line-height: 1.6;
+    }
+    .tool-body .ghost { margin-top: 8px; }
+
+    .error-card {
+      padding: 12px 14px;
+      border: 1px solid #fecaca;
+      border-radius: 12px;
+      background: #fef2f2;
+      color: #7f1d1d;
+    }
+    .error-card p { margin: 0; }
+    .error-card .ghost { margin-top: 8px; }
+
+    .spinner {
+      width: 14px;
+      height: 14px;
+      border: 2px solid var(--color-border);
+      border-top-color: var(--color-primary);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    .composer-wrap {
+      border-top: 1px solid var(--color-border);
+      background: var(--color-surface);
+      padding: 12px 20px calc(16px + env(safe-area-inset-bottom));
+    }
+    .composer { max-width: 880px; margin: 0 auto; }
+    .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+    .chip {
+      min-height: 44px;
+      padding: 0 14px;
+      border: 1px solid var(--color-border);
+      border-radius: 999px;
+      background: var(--color-surface);
+      color: var(--color-primary);
+      font-weight: 500;
+    }
+    .chip:hover { background: var(--color-muted); }
+    label { display: block; margin-bottom: 6px; font-size: 14px; font-weight: 600; }
+    .composer-box {
+      display: flex;
+      align-items: flex-end;
+      gap: 8px;
+      padding: 8px;
+      border: 1px solid var(--color-border);
+      border-radius: 14px;
+      background: var(--color-surface);
+    }
+    .composer-box:focus-within {
+      border-color: var(--color-primary);
+      box-shadow: 0 0 0 3px rgba(30, 58, 95, 0.22);
+    }
+    textarea {
+      flex: 1;
+      width: 100%;
+      min-height: 48px;
+      max-height: 160px;
+      padding: 10px 8px;
+      border: 0;
+      resize: none;
+      line-height: 1.5;
+      background: transparent;
+      color: inherit;
+    }
+    textarea:focus-visible { outline: none; }
+    textarea::placeholder { color: var(--color-subtle); }
+    #send { min-width: 76px; padding: 0 16px; }
+    #live-status {
+      min-height: 20px;
+      margin: 8px 0 0;
+      color: var(--color-primary);
+      font-size: 14px;
+    }
+    .helper { margin: 4px 0 0; color: var(--color-subtle); font-size: 14px; }
+
+    @keyframes enter {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: none; }
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    @media (min-width: 768px) {
+      .caps { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .backdrop { display: none !important; }
+      .sidebar { position: static; transform: none !important; }
+    }
+
+    @media (max-width: 767px) {
+      .app { grid-template-columns: 1fr; }
+      .menu-btn { display: inline-flex; }
+      .sidebar {
+        position: fixed;
+        z-index: 40;
+        top: 0;
+        bottom: 0;
+        left: 0;
+        width: min(84vw, 300px);
+        transform: translateX(-105%);
+        transition: transform 200ms ease-out;
+        box-shadow: var(--shadow);
+      }
+      .sidebar.open { transform: translateX(0); }
+      .topbar { padding-inline: 12px; }
+      h1 { font-size: 16px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation: none !important;
+        transition: none !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip" href="#log">跳到对话</a>
+  <div class="app">
+    <aside id="sidebar" class="sidebar">
+      <div>
+        <p class="brand">估值助手</p>
+        <p class="brand-sub">案例、估值、报告</p>
+      </div>
+      <button type="button" id="new-chat" class="primary">新对话</button>
+      <nav aria-label="历史会话">
+        <ul id="session-list" class="session-list"></ul>
+      </nav>
+    </aside>
+    <button type="button" id="backdrop" class="backdrop" hidden aria-label="关闭会话列表"></button>
+    <main>
+      <header class="topbar">
+        <button type="button" id="menu-btn" class="menu-btn" aria-expanded="false" aria-controls="sidebar">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true">
+            <path d="M4 7h16M4 12h16M4 17h16"></path>
+          </svg>
+          会话
+        </button>
+        <h1 id="page-title">估值助手</h1>
+        <p id="conn" class="conn">
+          <span class="dot" id="dot" aria-hidden="true"></span>
+          <span id="conn-text">正在检查模型</span>
+        </p>
+      </header>
+      <div class="thread">
+        <div id="log" class="log" role="log" aria-label="对话"></div>
+      </div>
+      <div class="composer-wrap">
+        <div class="composer">
+          <div class="chips" role="group" aria-label="示例需求">
+            <button type="button" class="chip" data-prompt="朝阳区望京新城 89 平两居，请做估值" aria-label="填入估值示例">估值</button>
+            <button type="button" class="chip" data-prompt="查一下望京新城附近、面积 80 到 100 平的成交案例" aria-label="填入查案例示例">查案例</button>
+            <button type="button" class="chip" data-prompt="根据刚才的估值和案例出一份报告" aria-label="填入出报告示例">出报告</button>
+          </div>
+          <form id="composer-form">
+            <label for="demand">评估需求</label>
+            <div class="composer-box">
+              <textarea id="demand" name="demand" rows="2" enterkeyhint="send" placeholder="例如：朝阳区望京新城 89 平两居，请估值"></textarea>
+              <button type="submit" id="send" class="primary">发送</button>
+            </div>
+            <p id="live-status" role="status"></p>
+            <p id="helper" class="helper">Enter 发送，Shift+Enter 换行。上方按钮只把示例填进输入框。</p>
+          </form>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <template id="empty-template">
+    <div class="empty" id="empty">
+      <h2>从一句话开始</h2>
+      <p>输入地址、面积或报告要求。助手会自行调用下面三项能力，并把每次的参数和结果留在对话里。</p>
+      <ul class="caps">
+        <li>
+          <span class="cap-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.75">
+              <circle cx="11" cy="11" r="7"></circle>
+              <path d="M20 20l-3.5-3.5"></path>
+            </svg>
+          </span>
+          <span>
+            <strong>查询案例</strong>
+            <span>按小区、行政区、面积筛选成交案例</span>
+          </span>
+        </li>
+        <li>
+          <span class="cap-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.75">
+              <path d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1v-9.5z"></path>
+            </svg>
+          </span>
+          <span>
+            <strong>估值</strong>
+            <span>给出单价、总价和依据</span>
+          </span>
+        </li>
+        <li>
+          <span class="cap-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.75">
+              <path d="M7 3h7l5 5v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"></path>
+              <path d="M14 3v5h5M8 13h8M8 17h6"></path>
+            </svg>
+          </span>
+          <span>
+            <strong>出报告</strong>
+            <span>把估值和案例写成评估报告</span>
+          </span>
+        </li>
+      </ul>
+    </div>
+  </template>
+
+  <script>
+    const thread = document.getElementById("log");
+    const form = document.getElementById("composer-form");
+    const demand = document.getElementById("demand");
+    const sendBtn = document.getElementById("send");
+    const statusLine = document.getElementById("live-status");
+    const sessionList = document.getElementById("session-list");
+    const newChatBtn = document.getElementById("new-chat");
+    const sidebar = document.getElementById("sidebar");
+    const backdrop = document.getElementById("backdrop");
+    const menuBtn = document.getElementById("menu-btn");
+    const emptyTemplate = document.getElementById("empty-template");
+
+    let sessions = [];
+    let currentId = null;
+    let busy = false;
+    let abortController = null;
+
+    function el(tag, className, text) {
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text != null) node.textContent = text;
+      return node;
+    }
+
+    function formatNumber(value) {
+      const number = Number(value);
+      if (!Number.isFinite(number)) return "—";
+      return new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 0 }).format(number);
+    }
+
+    function formatWan(value) {
+      const number = Number(value);
+      if (!Number.isFinite(number)) return "—";
+      if (Math.abs(number) >= 10000) {
+        const wan = number / 10000;
+        const digits = wan >= 100 ? 0 : 2;
+        return new Intl.NumberFormat("zh-CN", {
+          minimumFractionDigits: digits,
+          maximumFractionDigits: digits,
+        }).format(wan) + " 万元";
+      }
+      return formatNumber(number) + " 元";
+    }
+
+    function formatArea(value) {
+      const number = Number(value);
+      if (!Number.isFinite(number)) return "";
+      const rounded = Math.round(number * 10) / 10;
+      return rounded + " ㎡";
+    }
+
+    function formatArgs(args) {
+      if (!args) return "";
+      const parts = [];
+      const labels = {
+        keyword: "关键词",
+        district: "行政区",
+        address: "地址",
+        property_type: "类型",
+        floor: "楼层",
+        subject: "评估对象",
+        valuation_id: "估值编号",
+      };
+      Object.entries(labels).forEach(([key, label]) => {
+        if (args[key]) parts.push(label + " " + args[key]);
+      });
+      if (args.area) parts.push("面积 " + formatArea(args.area));
+      if (args.area_min || args.area_max) {
+        if (args.area_min && args.area_max) parts.push("面积 " + formatArea(args.area_min) + "–" + formatArea(args.area_max));
+        else if (args.area_min) parts.push("面积 ≥ " + formatArea(args.area_min));
+        else parts.push("面积 ≤ " + formatArea(args.area_max));
+      }
+      if (Array.isArray(args.case_ids) && args.case_ids.length) parts.push("案例 " + args.case_ids.join("、"));
+      else if (typeof args.case_ids === "string" && args.case_ids) parts.push("案例 " + args.case_ids);
+      return parts.join(" · ");
+    }
+
+    function scrollDown() {
+      const scroller = thread.parentElement;
+      scroller.scrollTop = scroller.scrollHeight;
+    }
+
+    function setStatus(text) {
+      statusLine.textContent = text || "";
+    }
+
+    function clearEmpty() {
+      const empty = document.getElementById("empty");
+      if (empty) empty.remove();
+    }
+
+    function renderTranscript(items) {
+      thread.replaceChildren();
+      if (!items.length) {
+        thread.appendChild(emptyTemplate.content.cloneNode(true));
+        return;
+      }
+      items.forEach((item, index) => {
+        if (item.type === "error") appendError(item.message, index === items.length - 1);
+        else renderItem(item);
+      });
+      scrollDown();
+    }
+
+    function renderItem(item) {
+      if (item.type === "user") appendUser(item.content);
+      else if (item.type === "assistant") appendAssistant(item.content);
+      else if (item.type === "tool") {
+        upsertTool({
+          type: "tool_result",
+          call_id: item.call_id,
+          name: item.name,
+          label: item.label,
+          arguments: item.arguments,
+          result: item.result,
+          ok: item.ok,
+        });
+      }
+    }
+
+    function appendUser(text) {
+      clearEmpty();
+      const bubble = el("article", "bubble bubble-user");
+      bubble.appendChild(el("p", null, text));
+      thread.appendChild(bubble);
+      scrollDown();
+    }
+
+    function appendAssistant(text) {
+      clearEmpty();
+      const bubble = el("article", "bubble bubble-assistant");
+      bubble.appendChild(el("p", null, text));
+      thread.appendChild(bubble);
+      scrollDown();
+    }
+
+    function appendError(message, canRetry) {
+      clearEmpty();
+      const box = el("div", "error-card");
+      box.setAttribute("role", "alert");
+      box.appendChild(el("p", null, message));
+      if (canRetry) {
+        const button = el("button", "ghost", "重试");
+        button.type = "button";
+        button.addEventListener("click", () => {
+          box.remove();
+          sendMessage(true);
+        });
+        box.appendChild(button);
+      }
+      thread.appendChild(box);
+      scrollDown();
+    }
+
+    function spinner() {
+      const node = el("span", "spinner");
+      node.setAttribute("aria-hidden", "true");
+      return node;
+    }
+
+    function upsertTool(event) {
+      clearEmpty();
+      let card = document.getElementById("tool-" + event.call_id);
+      if (!card) {
+        card = el("article", "tool-card");
+        card.id = "tool-" + event.call_id;
+        card.dataset.tool = event.name || "";
+        card.dataset.state = "running";
+        const header = el("div", "tool-head");
+        const titleWrap = el("div", "tool-title-wrap");
+        titleWrap.appendChild(spinner());
+        titleWrap.appendChild(el("p", "tool-title", event.label || event.name || "工具"));
+        header.appendChild(titleWrap);
+        header.appendChild(el("p", "tool-status", "调用中"));
+        card.appendChild(header);
+        const args = formatArgs(event.arguments);
+        if (args) card.appendChild(el("p", "tool-args", args));
+        card.appendChild(el("div", "tool-body"));
+        thread.appendChild(card);
+      }
+      if (event.result) {
+        card.dataset.state = event.ok ? "done" : "error";
+        const status = card.querySelector(".tool-status");
+        if (!event.ok) status.textContent = "失败";
+        else if (event.result.sample) status.textContent = "已完成，示例数据";
+        else status.textContent = "已完成";
+        const spin = card.querySelector(".spinner");
+        if (spin) spin.remove();
+        fillToolBody(card.querySelector(".tool-body"), event.name, event.result);
+      }
+      scrollDown();
+    }
+
+    function fillToolBody(container, name, result) {
+      container.replaceChildren();
+      if (!result.ok) {
+        container.appendChild(el("p", "tool-error", result.error || "调用失败"));
+        return;
+      }
+      if (name === "search_cases") renderCases(container, result);
+      else if (name === "valuation") renderValuation(container, result);
+      else if (name === "generate_report") renderReport(container, result);
+      else container.appendChild(el("pre", "plain", JSON.stringify(result, null, 2)));
+    }
+
+    function renderCases(container, result) {
+      const cases = result.cases || [];
+      if (!cases.length) {
+        container.appendChild(el("p", "muted", result.summary || "没有符合条件的案例"));
+        return;
+      }
+      const list = el("ul", "cases");
+      cases.forEach((item) => {
+        const li = el("li", "case");
+        li.appendChild(el("p", "case-title", item.address || item.community || "案例"));
+        const meta = [
+          item.area ? formatArea(item.area) : "",
+          item.unit_price ? "单价 " + formatNumber(item.unit_price) + " 元/㎡" : "",
+          item.price ? "总价 " + formatWan(item.price) : "",
+          item.deal_date || "",
+          item.id || "",
+        ].filter(Boolean).join(" · ");
+        li.appendChild(el("p", "case-meta", meta));
+        list.appendChild(li);
+      });
+      container.appendChild(list);
+      container.appendChild(el("p", "muted", result.summary || "共 " + cases.length + " 条"));
+    }
+
+    function metric(label, value) {
+      const wrap = el("div", "metric");
+      wrap.appendChild(el("span", "metric-label", label));
+      wrap.appendChild(el("strong", "metric-value", value));
+      return wrap;
+    }
+
+    function renderValuation(container, result) {
+      const metrics = el("div", "metrics");
+      metrics.appendChild(metric("评估总价", formatWan(result.total_price)));
+      metrics.appendChild(metric("评估单价", formatNumber(result.unit_price) + " 元/㎡"));
+      container.appendChild(metrics);
+      if (result.basis) container.appendChild(el("p", "basis", result.basis));
+      if (result.valuation_id) container.appendChild(el("p", "muted", "估值编号 " + result.valuation_id));
+      if (result.references && result.references.length) {
+        container.appendChild(el("p", "ref-label", "参照案例"));
+        const list = el("ul", "refs");
+        result.references.forEach((item) => {
+          list.appendChild(el("li", null, (item.address || item.id) + " · " + formatNumber(item.unit_price) + " 元/㎡"));
+        });
+        container.appendChild(list);
+      }
+    }
+
+    function renderReport(container, result) {
+      container.appendChild(el("h2", "report-title", result.title || "估价报告"));
+      if (result.summary) container.appendChild(el("p", "report-summary", result.summary));
+      if (!result.content) return;
+      const details = document.createElement("details");
+      details.className = "report-details";
+      const summary = document.createElement("summary");
+      summary.textContent = "展开全文";
+      details.append(summary, el("pre", "plain", result.content));
+      container.appendChild(details);
+      const button = el("button", "ghost", "下载文本");
+      button.type = "button";
+      button.addEventListener("click", () => downloadText((result.report_id || "估价报告") + ".txt", result.content));
+      container.appendChild(button);
+    }
+
+    function downloadText(filename, text) {
+      const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    function markRunningStopped() {
+      document.querySelectorAll('.tool-card[data-state="running"]').forEach((card) => {
+        card.dataset.state = "stopped";
+        const status = card.querySelector(".tool-status");
+        if (status) status.textContent = "已停止";
+        const spin = card.querySelector(".spinner");
+        if (spin) spin.remove();
+      });
+    }
+
+    function renderSessionList() {
+      sessionList.replaceChildren();
+      sessions.forEach((session) => {
+        const li = document.createElement("li");
+        const button = el("button", "session-btn", session.title || "新对话");
+        button.type = "button";
+        button.title = session.title || "新对话";
+        button.disabled = busy && session.id !== currentId;
+        if (session.id === currentId) button.setAttribute("aria-current", "true");
+        button.addEventListener("click", () => selectSession(session.id));
+        li.appendChild(button);
+        sessionList.appendChild(li);
+      });
+      newChatBtn.disabled = busy;
+    }
+
+    function setBusy(value) {
+      busy = value;
+      sendBtn.textContent = value ? "停止" : "发送";
+      sendBtn.type = value ? "button" : "submit";
+      sendBtn.setAttribute("aria-label", value ? "停止当前请求" : "发送");
+      form.setAttribute("aria-busy", value ? "true" : "false");
+      if (value) sendBtn.disabled = false;
+      else syncSend();
+      renderSessionList();
+    }
+
+    function syncSend() {
+      if (busy) return;
+      sendBtn.disabled = demand.value.trim() === "";
+    }
+
+    function autosize() {
+      demand.style.height = "auto";
+      demand.style.height = Math.min(demand.scrollHeight, 160) + "px";
+    }
+
+    async function api(path, options) {
+      const response = await fetch(path, options);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.message || "请求失败");
+      return data;
+    }
+
+    async function checkHealth() {
+      const text = document.getElementById("conn-text");
+      const dot = document.getElementById("dot");
+      try {
+        const health = await api("/api/health");
+        if (health.ollama) {
+          text.textContent = health.model + " 已连接";
+          dot.dataset.state = "ok";
+        } else {
+          text.textContent = "模型未连接";
+          dot.dataset.state = "bad";
+        }
+        const helper = document.getElementById("helper");
+        helper.textContent = health.sample_data
+          ? "Enter 发送，Shift+Enter 换行。上方按钮只把示例填进输入框。还没填写地址的接口会返回示例数据。"
+          : "Enter 发送，Shift+Enter 换行。上方按钮只把示例填进输入框。";
+      } catch (error) {
+        text.textContent = "页面服务未响应";
+        dot.dataset.state = "bad";
+      }
+    }
+
+    function openSidebar() {
+      sidebar.classList.add("open");
+      backdrop.hidden = false;
+      menuBtn.setAttribute("aria-expanded", "true");
+    }
+
+    function closeSidebar() {
+      sidebar.classList.remove("open");
+      backdrop.hidden = true;
+      menuBtn.setAttribute("aria-expanded", "false");
+    }
+
+    async function selectSession(id) {
+      if (busy) return;
+      closeSidebar();
+      if (id === currentId) return;
+      currentId = id;
+      renderSessionList();
+      const detail = await api("/api/sessions/" + encodeURIComponent(id));
+      renderTranscript(detail.transcript || []);
+    }
+
+    async function createSession() {
+      const created = await api("/api/sessions", { method: "POST" });
+      sessions.unshift(created);
+      currentId = created.id;
+      renderSessionList();
+      renderTranscript([]);
+      closeSidebar();
+      demand.focus();
+    }
+
+    async function sendMessage(retrying) {
+      const text = demand.value.trim();
+      if (!currentId || busy) return;
+      if (!retrying && !text) return;
+      setBusy(true);
+      if (!retrying) {
+        appendUser(text);
+        demand.value = "";
+        autosize();
+        syncSend();
+      }
+      setStatus(retrying ? "正在重试" : "正在发送");
+      abortController = new AbortController();
+      try {
+        const response = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(retrying
+            ? { session_id: currentId, retry: true }
+            : { session_id: currentId, message: text }),
+          signal: abortController.signal,
+        });
+        if (!response.ok) {
+          const err = await response.json().catch(() => ({}));
+          appendError(err.message || "请求失败", response.status !== 409);
+          return;
+        }
+        await consume(response);
+      } catch (error) {
+        if (error.name === "AbortError") {
+          markRunningStopped();
+          setStatus("");
+        } else {
+          appendError("网络异常，请重试", true);
+        }
+      } finally {
+        setBusy(false);
+        abortController = null;
+        refreshSessions();
+      }
+    }
+
+    async function consume(response) {
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const chunks = buffer.split("\n\n");
+        buffer = chunks.pop();
+        chunks.forEach((chunk) => {
+          const line = chunk.split("\n").find((item) => item.startsWith("data:"));
+          if (!line) return;
+          try {
+            handleEvent(JSON.parse(line.slice(5).trim()));
+          } catch (error) {
+            /* 忽略半包 */
+          }
+        });
+      }
+    }
+
+    function handleEvent(event) {
+      if (event.type === "status") setStatus(event.text || "");
+      else if (event.type === "session") updateTitle(event.id, event.title);
+      else if (event.type === "tool_call" || event.type === "tool_result") upsertTool(event);
+      else if (event.type === "assistant") {
+        setStatus("");
+        appendAssistant(event.content || "");
+      } else if (event.type === "error") {
+        setStatus("");
+        appendError(event.message || "处理失败", !!event.retry);
+      } else if (event.type === "stopped") {
+        setStatus("");
+        markRunningStopped();
+      } else if (event.type === "done") setStatus("");
+    }
+
+    function updateTitle(id, title) {
+      const found = sessions.find((item) => item.id === id);
+      if (found) found.title = title;
+      renderSessionList();
+    }
+
+    async function refreshSessions() {
+      try {
+        const data = await api("/api/sessions");
+        sessions = data.sessions || [];
+        renderSessionList();
+      } catch (error) {
+        /* 列表刷新失败不影响当前对话 */
+      }
+    }
+
+    async function stop() {
+      if (abortController) abortController.abort();
+      if (!currentId) return;
+      await fetch("/api/chat/stop", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: currentId }),
+      }).catch(() => {});
+    }
+
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      if (!busy) sendMessage(false);
+    });
+
+    sendBtn.addEventListener("click", (event) => {
+      if (!busy) return;
+      event.preventDefault();
+      stop();
+    });
+
+    demand.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+        event.preventDefault();
+        if (!busy) form.requestSubmit();
+      }
+    });
+    demand.addEventListener("input", () => {
+      autosize();
+      syncSend();
+    });
+
+    document.querySelectorAll(".chip").forEach((chip) => {
+      chip.addEventListener("click", () => {
+        demand.value = chip.dataset.prompt || "";
+        autosize();
+        syncSend();
+        demand.focus();
+      });
+    });
+
+    newChatBtn.addEventListener("click", () => {
+      if (!busy) createSession();
+    });
+    menuBtn.addEventListener("click", () => {
+      if (sidebar.classList.contains("open")) closeSidebar();
+      else openSidebar();
+    });
+    backdrop.addEventListener("click", closeSidebar);
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") closeSidebar();
+    });
+
+    async function init() {
+      syncSend();
+      checkHealth();
+      try {
+        const data = await api("/api/sessions");
+        sessions = data.sessions || [];
+        if (!sessions.length) {
+          const created = await api("/api/sessions", { method: "POST" });
+          sessions = [created];
+        }
+        currentId = sessions[0].id;
+        renderSessionList();
+        const detail = await api("/api/sessions/" + encodeURIComponent(currentId));
+        renderTranscript(detail.transcript || []);
+      } catch (error) {
+        appendError("无法连接页面服务。请确认已运行 agent_server.py。", false);
+      }
+    }
+
+    init();
+  </script>
+</body>
+</html>

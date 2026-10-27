@@ -44,6 +44,7 @@ for iteration in range(10):  # 安全上限：最多循环 10 次，防止失控
 
     response: ChatResponse | None = None
     for attempt in range(3):
+        print(f"message=>{messages}")
         try:
             response = client.chat(
                 model='qwen3.5:9b',
