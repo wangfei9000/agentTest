@@ -5,7 +5,7 @@
 
 nohup .venv/bin/python agent_server.py > start.log 2>&1 &
 浏览器打开 http://127.0.0.1:8765
-模型仍使用本机 Ollama 的 qwen3.5:9b，工具调用循环与 agent_wf.py 相同。
+模型仍使用本机 Ollama 的 qwen3.5:9b，工具调用循环与 wf_agent.py 相同。
 """
 
 from __future__ import annotations
@@ -29,7 +29,9 @@ from tools import TOOL_LABELS, TOOLS_FOR_MODEL, VALUATION_URL, call_tool, first_
 HOST = "0.0.0.0"
 PORT = 8081
 OLLAMA_HOST = "http://127.0.0.1:11434"
-MODEL = "llama3.2:latest" #"qwen3.5:9b"
+#MODEL = "llama3.2:latest"
+MODEL = "qwen3.5:9b"
+
 MAX_ROUNDS = 10
 ROOT = Path(__file__).resolve().parent
 

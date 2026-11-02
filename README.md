@@ -118,7 +118,7 @@ Python 版示例：
 
 ```bash
 pip install ollama
-python3 agent_wf.py
+python3 wf_agent.py
 ```
 
 它会计算 `(11434 + 12341) * 412`，并在终端打印每一轮的工具名、参数和本地结果。

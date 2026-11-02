@@ -1,35 +1,10 @@
 from ollama import Client, ChatResponse, ResponseError
 import time
 
+from wf_tools import available_functions
+
 # 直连本机，避免请求被系统代理转走后返回空 502
 client = Client(host="http://127.0.0.1:11434", trust_env=False)
-
-# 1. 定义你的工具（函数）
-def add(a: int, b: int) -> int:
-    """将两个数字相加。
-
-    Args:
-        a: 第一个加数
-        b: 第二个加数
-    """
-    print("add ->" + str(a) + " + " + str(b))
-    return a + b
-
-def multiply(a: int, b: int) -> int:
-    """将两个数字相乘。
-
-    Args:
-        a: 被乘数
-        b: 乘数
-    """
-    print("multiply ->" + str(a) + " * " + str(b))
-    return a * b
-
-# 建立一个从工具名到函数的映射，方便动态调用
-available_functions = {
-    "add": add,
-    "multiply": multiply,
-}
 
 # 2. 初始化对话历史
 messages = [{
@@ -49,7 +24,7 @@ for iteration in range(10):  # 安全上限：最多循环 10 次，防止失控
             response = client.chat(
                 model='qwen3.5:9b',
                 messages=messages,
-                tools=[add, multiply],  # 将工具清单交给模型
+                tools=list(available_functions.values()),  # 自动交给模型全部已注册工具
                 think=False,
             )
             break
