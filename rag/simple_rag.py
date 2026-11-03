@@ -202,8 +202,8 @@ def main():
         return
 
     print("\n=== 3. 问答 ===")
-    ask(store, "Python 基础需要学习哪些内容？")
-    ask(store, "装饰器是做什么用的？")
+    ask(store, "简单介绍一下文档是干什么的？")
+    #ask(store, "装饰器是做什么用的？")
 
     print("\n=== 进入交互（输入 q 退出）===")
     while True:
