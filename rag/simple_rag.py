@@ -88,8 +88,28 @@ def _add_with_retry(store: Chroma, batch: list[Document], batch_no: int, total: 
             time.sleep(wait)
 
 
+def _make_embeddings():
+    return OllamaEmbeddings(
+        model=EMBED_MODEL,
+        base_url=OLLAMA_BASE,
+        client_kwargs=_ollama_client_kwargs(),
+    )
+
+
+def load_vectorstore():
+    """打开已有的 Chroma 持久化目录"""
+    embeddings = _make_embeddings()
+    store = Chroma(
+        collection_name="simple_rag",
+        embedding_function=embeddings,
+        persist_directory=str(DB_DIR),
+    )
+    print(f"[索引] 复用已有向量库：{DB_DIR}")
+    return store
+
+
 def build_vectorstore(docs):
-    """切分文档并写入 Chroma"""
+    """切分文档并写入 Chroma（会清空并重建 DB_DIR）"""
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=500,
         chunk_overlap=80,
@@ -98,11 +118,7 @@ def build_vectorstore(docs):
     chunks = splitter.split_documents(docs)
     print(f"[切分] 共 {len(chunks)} 个片段")
 
-    embeddings = OllamaEmbeddings(
-        model=EMBED_MODEL,
-        base_url=OLLAMA_BASE,
-        client_kwargs=_ollama_client_kwargs(),
-    )
+    embeddings = _make_embeddings()
 
     # 预热 embedding 模型，避免第一批大批量请求时冷启动 502
     print(f"[预热] 加载 Embedding 模型 {EMBED_MODEL} ...")
@@ -185,25 +201,32 @@ def ask(store: Chroma, question: str, k: int = 3):
 def main():
     import sys
 
-    if not DOCS_DIR.exists():
-        raise SystemExit(f"请先创建文档目录：{DOCS_DIR}")
+    rebuild = "--rebuild" in sys.argv
+    args = [a for a in sys.argv[1:] if a != "--rebuild"]
 
-    print("=== 1. 加载文档 ===")
-    docs = load_docs(DOCS_DIR)
-    if not docs:
-        raise SystemExit("docs/ 下没有可读的 .md / .txt / .pdf")
+    if DB_DIR.exists() and not rebuild:
+        print("=== 1. 加载已有向量库（跳过文档加载与重建）===")
+        print("    若文档有更新，请加 --rebuild 强制重建")
+        store = load_vectorstore()
+    else:
+        if not DOCS_DIR.exists():
+            raise SystemExit(f"请先创建文档目录：{DOCS_DIR}")
 
-    print("\n=== 2. 建立向量索引 ===")
-    store = build_vectorstore(docs)
+        print("=== 1. 加载文档 ===")
+        docs = load_docs(DOCS_DIR)
+        if not docs:
+            raise SystemExit("docs/ 下没有可读的 .md / .txt / .pdf")
 
-    # 有命令行参数时直接问答后退出；否则跑两道示例题再进入交互
-    if len(sys.argv) > 1:
-        ask(store, " ".join(sys.argv[1:]))
+        print("\n=== 2. 建立向量索引 ===")
+        store = build_vectorstore(docs)
+
+    # 有命令行参数时直接问答后退出；否则跑示例题再进入交互
+    if args:
+        ask(store, " ".join(args))
         return
 
-    print("\n=== 3. 问答 ===")
-    ask(store, "简单介绍一下文档是干什么的？")
-    #ask(store, "装饰器是做什么用的？")
+    print("\n=== 问答 ===")
+    ask(store, "找到 侯位胡同 小区，并以json格式返回")
 
     print("\n=== 进入交互（输入 q 退出）===")
     while True:
